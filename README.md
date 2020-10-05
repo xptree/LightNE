@@ -98,4 +98,4 @@ Archive:  datasets.zip
   inflating: youtube.mat
 ```
 
-Besides BlogCatalog, You can run `flickr_lightne.sh`, `youtube_lightne.sh`, `mag_lightne.sh` for each dataset.
+Besides BlogCatalog, You can run `youtube_lightne.sh`, `mag_lightne.sh` for each dataset.
