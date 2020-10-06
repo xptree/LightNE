@@ -1,6 +1,9 @@
 # LightNE
 
-LightNE is in the LightNE directory.
+Code for SIGMOD 2021 submission *LightNE: A Lightweight Graph Processing System for Network Embedding*.
+
+LightNE algorithm is in the LightNE directory.
+
 
 ## Dependencies Installation
 
