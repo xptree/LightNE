@@ -76,7 +76,7 @@ export LD_LIBRARY_PATH=/home/XXX/anaconda3/envs/lightne/lib
 Then you can run `blog_lightne.sh`. The running log is stored at `blog_lightne.log`
 
 
-### Other datasets from NetSMF paper
+### Datasets from NetSMF paper
 
 Download and unzip datasets used in NetSMF paper
 ```
@@ -99,3 +99,9 @@ Archive:  datasets.zip
 ```
 
 Besides BlogCatalog, You can run `youtube_lightne.sh`, `mag_lightne.sh` for each dataset.
+
+### Very Large Graphs
+
+* ClueWeb graph can be downloaded from [here](http://law.di.unimi.it/webdata/clueweb12/).
+* Hyperlink2014 graph can be downloaded from [here](http://webdatacommons.org/hyperlinkgraph/2014-04/download.html).
+
