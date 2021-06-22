@@ -20,6 +20,7 @@
 #include <fstream>
 #include <random>
 #include <vector>
+#include <algorithm>
 
 #define TWO63 0x8000000000000000u
 #define TWO64f (TWO63*2.0)
@@ -77,9 +78,11 @@ namespace path_embed {
     return std::move(edges);
   }
 
-  template <class Graph>
+  template <class Graph, typename FP>
   auto generate_trunc_log_matrix_v2(Graph& GA,
-      pbbs::random seed, size_t walks_per_edge, size_t walk_len, bool upper, bool sample, size_t table_size, size_t negative, float sample_ratio, float mem_ratio, const std::vector<float>& step_coeff) {
+      pbbs::random seed, size_t walks_per_edge, size_t walk_len, bool upper, bool sample, size_t table_size, size_t negative, float sample_ratio,
+      float mem_ratio, const std::vector<float>& step_coeff, MKL_INT*& rows_start, MKL_INT*& col_idx, FP*& value) {
+
     using W = typename Graph::weight_type;
     size_t n = GA.n;
     size_t m = GA.m;
@@ -88,11 +91,12 @@ namespace path_embed {
 
     using T = std::tuple<K, V>;
     auto empty = std::make_tuple(std::numeric_limits<size_t>::max(), static_cast<V>(0));
-    if (sample) {
-      table_size = std::max(static_cast<size_t>(walk_len * GA.n * logn * mem_ratio), table_size);
-    } else {
-      table_size = std::max(static_cast<size_t>(walk_len * GA.m * mem_ratio), table_size);
-    }
+    // if (sample) {
+    //   table_size = std::max(static_cast<size_t>(walk_len * GA.n * logn * mem_ratio), table_size);
+    // } else {
+    //   table_size = std::max(static_cast<size_t>(walk_len * GA.m * mem_ratio), table_size);
+    // }
+    table_size = std::max(static_cast<size_t>(walk_len * GA.n * logn * mem_ratio), table_size);
     std::cout << "# table_size = " << table_size << std::endl;
     auto hash_f = [&] (size_t k) { return pbbs::hash64_2(k); };
     auto HT = make_par_table(table_size, empty, hash_f, 2);
@@ -100,7 +104,8 @@ namespace path_embed {
     std::cout << "# empty = (" << std::get<0>(HT.empty) << "," << std::get<1>(HT.empty) << ")" << std::endl;
     std::cout << "# empty key = " << HT.empty_key << std::endl;
 
-    auto M = (sample) ? (walk_len * GA.n * logn * sample_ratio) : (walk_len * walks_per_edge * GA.m * sample_ratio);
+    // auto M = (sample) ? (walk_len * GA.n * logn * sample_ratio) : (walk_len * walks_per_edge * GA.m * sample_ratio);
+    auto M = walk_len * GA.n * logn * sample_ratio;
     double one_over_lambda = static_cast<double>(M) / static_cast<double>(m);
     size_t exp_rv_rounded = static_cast<size_t>(one_over_lambda); // this is one option---don't sample, and just take expectation
     double fractional_bits = one_over_lambda - static_cast<double>(exp_rv_rounded);
@@ -124,12 +129,14 @@ namespace path_embed {
       //1. generate exp r.v. seeded by (u,v)
       size_t uv = (static_cast<size_t>(u) << 32UL) | static_cast<size_t>(v);
       auto our_seed = seed.fork(uv);
-      // a simpler version than sampling from a Poisson distribution
       size_t exp_rv = exp_rv_rounded;
       if (fractional_bits > 0.0000000001) { /* somewhat non-trivial? */
         exp_rv += static_cast<double>(map_uint64_t(our_seed.rand()) < fractional_bits);
         our_seed = our_seed.next();
       }
+      // std::default_random_engine generator(our_seed.rand());
+      // our_seed = our_seed.next();
+      // std::discrete_distribution<uintE> distribution(step_coeff.begin(), step_coeff.end());
 
       if (!sample) {
         // Apply the sampler to this edge exp_rv many times
@@ -179,12 +186,12 @@ namespace path_embed {
     });
     V M_exact = pbbs::reduce(wgh_seq, pbbs::addm<V>());
     std::cout << "# tot wgh (samples) = " << M_exact << std::endl;
-//    // following are for debugging
-//    double M_distinct = pbbs::reduce(distinct_seq, pbbs::addm<size_t>());
-//    size_t avg_weight = static_cast<double>(M_exact) / static_cast<double>(M_distinct);
-//    std::cout << "# distinct samples = " << M_distinct << std::endl;
-//    std::cout << "# max wgh = " << pbbs::reduce(wgh_seq, pbbs::maxm<size_t>()) << std::endl;
-//    std::cout << "# avg_weight = " << avg_weight << std::endl;
+    // following are for debugging
+    // double M_distinct = pbbs::reduce(distinct_seq, pbbs::addm<size_t>());
+    // size_t avg_weight = static_cast<double>(M_exact) / static_cast<double>(M_distinct);
+    // std::cout << "# distinct samples = " << M_distinct << std::endl;
+    // std::cout << "# max wgh = " << pbbs::reduce(wgh_seq, pbbs::maxm<size_t>()) << std::endl;
+    // std::cout << "# avg_weight = " << avg_weight << std::endl;
 
     // (2) Prune based on trunc_log.
     // auto my_log = [&](double x) -> double {return log(x);};
@@ -210,14 +217,108 @@ namespace path_embed {
     };
     HT.map_table(map_f);
 
+    auto t_less = [&] (const T& l, const T& r) {
+      return std::get<0>(l) < std::get<0>(r);
+    };
+
+    if (rows_start != NULL) {
+      std::cout << "# passing a valid row_start pointer, will construct CSR from Hash table directly" << std::endl;
+      auto sparsifier_upper_entries_count = pbbslib::make_sequence<size_t>(HT.m, [&] (size_t i) {
+        if (std::get<0>(HT.table[i]) != std::numeric_limits<size_t>::max()) {
+          return static_cast<size_t>(1);
+        } else {
+          return static_cast<size_t>(0);
+        }
+      });
+      size_t sparsifier_upper_nnz = pbbs::reduce(sparsifier_upper_entries_count, pbbs::addm<size_t>());
+      std::cout << "# nnz in upper triangle of sparsifier = " << sparsifier_upper_nnz << std::endl;
+
+      auto sparsifier_entries_count = pbbslib::make_sequence<size_t>(HT.m, [&] (size_t i) {
+        if (std::get<0>(HT.table[i]) != std::numeric_limits<size_t>::max()) {
+          uintE u = (uintE)(std::get<0>(HT.table[i]) >> 32UL);
+          uintE v = (uintE)(std::get<0>(HT.table[i]));
+          if (upper) {
+            return static_cast<size_t>(1);
+          } else {
+            return (u == v) ? static_cast<size_t>(1) : static_cast<size_t>(2);
+          }
+        } else {
+          return static_cast<size_t>(0);
+        }
+      });
+      size_t sparsifier_nnz = pbbs::reduce(sparsifier_entries_count, pbbs::addm<size_t>());
+      std::cout << "# nnz in sparsifier = " << sparsifier_nnz << std::endl;
+
+      // dangerous
+      timer st; st.start();
+      std::cout << "# scan Hash table" << std::endl;
+      size_t table_size = HT.size();
+      T* table = HT.to_array();
+      std::cout << "# Hash table address " << table << std::endl;
+      for (size_t i=sparsifier_upper_nnz, j=0; i<table_size; ++i) {
+        if (std::get<0>(table[i]) != std::numeric_limits<size_t>::max()) {
+          while (j < sparsifier_upper_nnz && std::get<0>(table[j]) != std::numeric_limits<size_t>::max()) {
+            ++j;
+          }
+          if (j < sparsifier_upper_nnz) {
+            std::swap(table[i], table[j]);
+            ++j;
+          } else {
+            break;
+          }
+        }
+      }
+      st.stop(); st.reportTotal("# scan time");
+
+      std::cout << "# shrink the sequence..." << std::endl;
+      T* table_shrink = (T*)realloc(table, sparsifier_upper_nnz * sizeof(T));
+      std::cout << "# Hash table (shrink) address " << table_shrink << std::endl;
+      auto sparsifier_entries = pbbs::sequence<T>(table_shrink, sparsifier_upper_nnz);
+
+      MKL_INT* non_zeros_per_row = new MKL_INT[GA.n]();
+      parallel_for(0, sparsifier_upper_nnz, [&] (size_t i) {
+        uintE u = (uintE)(std::get<0>(sparsifier_entries[i]) >> 32UL);
+        uintE v = (uintE)(std::get<0>(sparsifier_entries[i]));
+        // ++non_zeros_per_row[u];
+        pbbslib::fetch_and_add(non_zeros_per_row+u, static_cast<MKL_INT>(1));
+        if (!upper && u!=v) {
+          // ++non_zeros_per_row[v];
+          pbbslib::fetch_and_add(non_zeros_per_row+v, static_cast<MKL_INT>(1));
+        }
+      });
+      rows_start[0] = 0;
+      for (size_t i=0; i < GA.n; ++i) {
+        rows_start[i+1] = rows_start[i] + non_zeros_per_row[i];
+      }
+      std::cout << "# nnz in sparsifier = " << rows_start[GA.n] << std::endl;
+      assert(rows_start[GA.n] == sparsifier_nnz);
+
+      col_idx = new MKL_INT[sparsifier_nnz];
+      value = new FP[sparsifier_nnz];
+
+      memset(non_zeros_per_row, 0, sizeof(MKL_INT) * GA.n);
+      parallel_for(0, sparsifier_upper_nnz, [&] (size_t i) {
+        uintE u = (uintE)(std::get<0>(sparsifier_entries[i]) >> 32UL);
+        uintE v = (uintE)(std::get<0>(sparsifier_entries[i]));
+        MKL_INT idx = pbbslib::fetch_and_add(non_zeros_per_row+u, static_cast<MKL_INT>(1));
+        col_idx[rows_start[u] + idx] = v;
+        value[rows_start[u] + idx] = static_cast<FP>(std::get<1>(sparsifier_entries[i]));
+        if (!upper && u!=v) {
+          idx = pbbslib::fetch_and_add(non_zeros_per_row+v, static_cast<MKL_INT>(1));
+          col_idx[rows_start[v] + idx] = u;
+          value[rows_start[v] + idx] = static_cast<FP>(std::get<1>(sparsifier_entries[i]));
+        }
+      });
+      delete[] non_zeros_per_row;
+      auto fake_entries = pbbs::sequence<T>(0);
+      std::cout << "# going to return a fake seq" << std::endl;
+      return fake_entries;
+    }
+
     std::cout << "# create sparsifier from hash table" << std::endl;
     auto sparsifier_upper_entries = HT.entries();
     HT.del();
     std::cout << "# tot kept = " << sparsifier_upper_entries.size() << " in upper triangle" << std::endl;
-
-    auto t_less = [&] (const T& l, const T& r) {
-      return std::get<0>(l) < std::get<0>(r);
-    };
 
     if (upper) {
       std::cout << "# return upper triangle only" << std::endl;
@@ -269,10 +370,14 @@ namespace path_embed {
 
   template <typename FP>
   FP* compute_u_sigma_root(FP* U, FP* S, size_t n, size_t rank, size_t dim, bool normalize, FP alpha=0.0) {
-    std::cout << "# computing u*sqrt(sigma), sigma(0)=" << S[0] << ", sigma(" << dim-1 << ")=" << S[dim-1] << std::endl;
+    if (S) {
+      std::cout << "# computing u*sqrt(sigma), sigma(0)=" << S[0] << ", sigma(" << dim-1 << ")=" << S[dim-1] << std::endl;
+    } else {
+      std::cout << "S is NULL" << std::endl;
+    }
     FP* emb = new FP[n*dim]();
     parallel_for(0, dim, [&] (size_t i) {
-      FP filtered_sigma = S[i];
+      FP filtered_sigma = S ? S[i]: 1.0;
       mklhelper<FP>::cblas_axpy(
           n,                     // const MKL_INT n,
           sqrt(filtered_sigma),  // const float a,
@@ -346,7 +451,10 @@ namespace path_embed {
         rows_start, rows_end, col_idx, value,
         false, // upper
         rank,
-        true // analyze
+        true, // analyze
+        false, // random project only
+        false, // sparse_project
+        0.0
         );
     svdOfA.run();
     FP* emb = compute_u_sigma_root<FP>(svdOfA.matU, svdOfA.S, GA.n, rank, dim, true, 0.0);
@@ -384,56 +492,69 @@ namespace path_embed {
   }
 
   template <class Graph, typename FP>
-  FP* NetSMF(Graph& GA, size_t walks_per_edge, size_t walk_len, bool upper, bool sample, size_t rank, size_t dim, bool analyze, size_t table_size, size_t negative, bool normalize, float sample_ratio, float mem_ratio, const std::vector<float>& step_coeff) {
+  FP* NetSMF(Graph& GA, size_t walks_per_edge, size_t walk_len, bool upper, bool sample, size_t rank, size_t dim, bool analyze, size_t table_size, size_t negative, bool normalize, float sample_ratio, float mem_ratio, const std::vector<float>& step_coeff, bool random_project_only, bool sparse_project, float sparse_project_s) {
+
+    MKL_INT n = static_cast<MKL_INT>(GA.n);
     timer t_path_sampling; t_path_sampling.start();
     size_t seed = time(0);
     std::cout << "# seed = " << seed << std::endl;
-    auto edges = generate_trunc_log_matrix_v2(GA, pbbs::random(seed), walks_per_edge, walk_len, upper, sample, table_size, negative, sample_ratio, mem_ratio, step_coeff);
+
+    bool csr = true;
+    MKL_INT* rows_start = NULL;
+    MKL_INT* col_idx = NULL;
+    FP* value = NULL;
+    if (csr) {
+      rows_start = new MKL_INT[GA.n + 1];
+    }
+    auto edges = generate_trunc_log_matrix_v2(GA, pbbs::random(seed), walks_per_edge, walk_len, upper, sample,
+                              table_size, negative, sample_ratio, mem_ratio, step_coeff,
+                              rows_start, col_idx, value);
     t_path_sampling.stop();
     t_path_sampling.reportTotal("# generate matrix time");
 
-    timer t_setup_svd; t_setup_svd.start();
-    MKL_INT n = static_cast<MKL_INT>(GA.n);
-    size_t num_directed_edges = edges.size();
-    MKL_INT nnz = static_cast<MKL_INT>(num_directed_edges);
+    if (!csr) {
+      timer t_setup_svd; t_setup_svd.start();
+      size_t num_directed_edges = edges.size();
+      MKL_INT nnz = static_cast<MKL_INT>(num_directed_edges);
 
-    // MKL_INT* row_idx = new MKL_INT[num_directed_edges];
-    // TODO: consider using mkl_malloc and mkl_free
-    // https://software.intel.com/content/www/us/en/develop/documentation/mkl-developer-reference-c/top/support-functions/memory-management/mkl-malloc.html
-    MKL_INT* rows_start = new MKL_INT[GA.n + 1]();
-    MKL_INT* col_idx = new MKL_INT[num_directed_edges];
-    FP* value = new FP[num_directed_edges];
-    parallel_for(0, num_directed_edges, [&] (size_t i) {
-      auto kv = edges[i];
-      uintE u = (uintE)(std::get<0>(kv) >> 32UL);
-      uintE v = (uintE)(std::get<0>(kv));
-      V wgh = std::get<1>(kv);
-      // row_idx[i] = static_cast<MKL_INT>(u);
-      if (i < 10) {
-        std::cout << u << " " << v << " " << wgh << std::endl;
-      }
-      if (i > 0) {
-        uintE u_prev = (uintE)(std::get<0>(edges[i-1]) >> 32UL);
-        if (u_prev != u) {
-          rows_start[u] = i;
+      col_idx = new MKL_INT[num_directed_edges];
+      value = new FP[num_directed_edges];
+      parallel_for(0, num_directed_edges, [&] (size_t i) {
+        auto kv = edges[i];
+        uintE u = (uintE)(std::get<0>(kv) >> 32UL);
+        uintE v = (uintE)(std::get<0>(kv));
+        V wgh = std::get<1>(kv);
+        // row_idx[i] = static_cast<MKL_INT>(u);
+        if (i < 10) {
+          std::cout << u << " " << v << " " << wgh << std::endl;
         }
+        if (i > 0) {
+          uintE u_prev = (uintE)(std::get<0>(edges[i-1]) >> 32UL);
+          if (u_prev != u) {
+            rows_start[u] = i;
+          }
+        }
+        col_idx[i] = static_cast<MKL_INT>(v);
+        value[i] = static_cast<FP>(wgh);
+      });
+      rows_start[GA.n] = num_directed_edges;
+      for (size_t i=1; i<=GA.n; ++i) {
+        rows_start[i] = std::max(rows_start[i], rows_start[i-1]);
       }
-      col_idx[i] = static_cast<MKL_INT>(v);
-      value[i] = static_cast<FP>(wgh);
-    });
-    rows_start[GA.n] = num_directed_edges;
-    for (size_t i=1; i<=GA.n; ++i) {
-      rows_start[i] = std::max(rows_start[i], rows_start[i-1]);
+      t_setup_svd.stop(); t_setup_svd.reportTotal("# svd setup time");
     }
-    MKL_INT* rows_end = rows_start + 1;
     edges.clear();
-    t_setup_svd.stop(); t_setup_svd.reportTotal("# svd setup time");
+    MKL_INT* rows_end = rows_start + 1;
 
     timer t_svd; t_svd.start();
     // mkl_redsvd::MKLRedSVD<FP> svdOfA(n, nnz, row_idx, col_idx, value, upper, rank, analyze);
     mkl_redsvd::MKLRedSVD<FP> svdOfA(n,
         rows_start, rows_end,
-        col_idx, value, upper, rank, analyze);
+        col_idx, value, upper, rank, analyze,
+        random_project_only,
+        sparse_project,
+        sparse_project_s
+        );
     svdOfA.run();
 
     FP* emb = compute_u_sigma_root<FP>(svdOfA.matU, svdOfA.S, n, rank, dim, normalize, 0.0);

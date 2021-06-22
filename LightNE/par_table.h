@@ -40,6 +40,16 @@ class par_table {
     }
   }
 
+  // gives up ownership of space
+  T* to_array() {
+    T* r = table;  
+    table = NULL; 
+    m = 0;
+    alloc = false; 
+    return r;
+  }
+ 
+
   par_table() : m(0) {
     mask = 0;
     alloc = false;

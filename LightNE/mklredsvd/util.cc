@@ -3,6 +3,8 @@
 #include <cassert>
 #include <iostream>
 
+#define ALIGN (64)
+
 namespace mkl_redsvd {
 
 // void standard_normal_vec_BM1(VSLStreamStatePtr stream, MKL_INT n, float* x) {
@@ -44,7 +46,8 @@ void util<T>::gram_schmidt(lapack_int m, lapack_int n, T* a) {
   std::cout << m << " " << n << std::endl;
   lapack_int mn = m < n ? m : n;
   lapack_int err;
-  T* tau = new T[mn]();
+  // T* tau = new T[mn]();
+  T* tau = (T*)mkl_calloc(mn, sizeof(T), ALIGN);
   std::cout << "sgeqrf..." << std::endl;
   err = mklhelper<T>::LAPACKE_geqrf(
       LAPACK_ROW_MAJOR,
@@ -71,7 +74,8 @@ void util<T>::gram_schmidt(lapack_int m, lapack_int n, T* a) {
     std::cout << "sorgqr returns " << err << std::endl;
     exit(0);
   }
-  delete[] tau;
+  // delete[] tau;
+  mkl_free(tau);
 }
 
 }

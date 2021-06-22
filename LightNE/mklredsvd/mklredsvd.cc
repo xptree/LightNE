@@ -3,16 +3,23 @@
 #include <chrono>  // for high_resolution_clock
 #include <iostream>
 #include <cassert>
+#include <set>
+
+#include "pbbslib/random.h"
+#include "pbbslib/sequence_ops.h"
 
 using namespace mkl_redsvd;
 
 template <typename FP>
-MKLRedSVD<FP>::MKLRedSVD(MKL_INT n, MKL_INT nnz, MKL_INT* row_idx, MKL_INT* col_idx, FP* value, bool upper, MKL_INT rank, bool analysis) {
+MKLRedSVD<FP>::MKLRedSVD(MKL_INT n, MKL_INT nnz, MKL_INT* row_idx, MKL_INT* col_idx, FP* value, bool upper, MKL_INT rank, bool analysis, bool random_project_only, bool sparse_project, float sparse_project_s) {
   std::cout << "init svd from coo" << std::endl;
   this->n = n;
   this->rank = rank;
   this->analysis = analysis;
   this->upper = upper;
+  this->random_project_only = random_project_only;
+  this->sparse_project = sparse_project;
+  this->sparse_project_s = sparse_project_s;
   S = NULL;
   matU = NULL;
   sparse_status_t status;
@@ -45,12 +52,15 @@ MKLRedSVD<FP>::MKLRedSVD(MKL_INT n, MKL_INT nnz, MKL_INT* row_idx, MKL_INT* col_
 }
 
 template <typename FP>
-MKLRedSVD<FP>::MKLRedSVD(MKL_INT n, MKL_INT* rows_start, MKL_INT* rows_end, MKL_INT* col_idx, FP* value, bool upper, MKL_INT rank, bool analysis) {
+MKLRedSVD<FP>::MKLRedSVD(MKL_INT n, MKL_INT* rows_start, MKL_INT* rows_end, MKL_INT* col_idx, FP* value, bool upper, MKL_INT rank, bool analysis, bool random_project_only, bool sparse_project, float sparse_project_s) {
   std::cout << "init svd from csr" << std::endl;
   this->n = n;
   this->rank = rank;
   this->analysis = analysis;
   this->upper = upper;
+  this->random_project_only = random_project_only;
+  this->sparse_project = sparse_project;
+  this->sparse_project_s = sparse_project_s;
   S = NULL;
   matU = NULL;
   sparse_status_t status;
@@ -73,10 +83,10 @@ MKLRedSVD<FP>::MKLRedSVD(MKL_INT n, MKL_INT* rows_start, MKL_INT* rows_end, MKL_
 template <typename FP>
 MKLRedSVD<FP>::~MKLRedSVD() {
   if (S != NULL) {
-    delete[] S;
+    mkl_free(S);
   }
   if (matU != NULL) {
-    delete[] matU;
+    mkl_free(matU);
   }
 }
 
@@ -89,8 +99,22 @@ void MKLRedSVD<FP>::run() {
   } else {
     descrA.type = SPARSE_MATRIX_TYPE_GENERAL;
   }
-
-  if (analysis) {
+  MKL_INT expected_calls;
+  if (random_project_only) {
+    if (sparse_project) {
+      expected_calls = 0;
+    } else {
+      expected_calls = 1;
+    }
+  } else {
+    if (sparse_project) {
+      expected_calls = 1;
+    } else {
+      expected_calls = 2;
+    }
+  }
+  std::cout << "expected calls of spmm = " << expected_calls << std::endl; 
+  if (analysis && expected_calls > 0) {
     auto start = std::chrono::high_resolution_clock::now();
     sparse_status_t status = mkl_sparse_set_mm_hint(
           csrA,                               // const sparse_matrix_t A,
@@ -98,7 +122,7 @@ void MKLRedSVD<FP>::run() {
           descrA,                             // const struct matrix_descr descr,
           SPARSE_LAYOUT_ROW_MAJOR,            // const sparse_layout_t layout,
           rank,                               // const MKL_INT dense_matrix_size,
-          2                                   // const MKL_INT expected_calls
+          expected_calls                      // const MKL_INT expected_calls
         );
     std::cout << "set sparse mm hint done, status=" << status << std::endl;
     // status = mkl_sparse_set_memory_hint(csrA, SPARSE_MEMORY_AGGRESSIVE);
@@ -118,33 +142,132 @@ void MKLRedSVD<FP>::run() {
   std::cout << n << std::endl;
   std::cout << rank << std::endl;
 
-  // compute sample matrix O
-  FP* O = new FP[n * rank];
-  util<FP>::standard_normal_vec_BM2(stream, n * rank, O);
-  std::cout << "sampling gaussian random matrix O for A^T done." << std::endl;
+  // compute Y = A.T * O = A * O, where O is the sample matrix.
+  FP* Y = (FP*)mkl_calloc(n * rank, sizeof(FP), ALIGN);
 
-  // compute Y = A.T * O = A * O
-  FP * Y = new FP[n * rank];
+  if (sparse_project) {
+    // https://web.stanford.edu/~hastie/Papers/Ping/KDD06_rp.pdf
+    FP s = sqrt(n);
+    if (sparse_project_s >= 1.0) {
+      s = static_cast<FP>(sparse_project_s);
+    }
+    FP density = 1. / s;
+    std::cout << "very sparse random projection with s = " << s << " and density (1/s) = " << density << std::endl;
+    int* non_zeros_per_row = new int[n];
+    int err = viRngBinomial(VSL_RNG_METHOD_BINOMIAL_BTPE, //method
+                        stream, //stream
+                        n, //n
+                        non_zeros_per_row, //r
+                        rank, //n_trial
+                        density // p
+                        );
+    assert(err == VSL_STATUS_OK);
+    std::cout << "create #nnz per row done." << std::endl;
+    MKL_INT* O_rows_start = new MKL_INT[n + 1];
+    O_rows_start[0] = 0;
+    for (size_t i=0; i<n; ++i) {
+      O_rows_start[i+1] = O_rows_start[i] + non_zeros_per_row[i];
+    }
+    MKL_INT* O_col_idx = new MKL_INT[O_rows_start[n]];
+    FP* O_value = new FP[O_rows_start[n]];
+    std::cout << "#nnz = " << O_rows_start[n] << std::endl;
+    auto seed = pbbs::random(time(0));
 
-  auto spmm_start = std::chrono::high_resolution_clock::now();
-  std::cout << "going to call mkl_sparse_s_mm" << std::endl;
-  mkl_status = mklhelper<FP>::mkl_sparse_mm(SPARSE_OPERATION_NON_TRANSPOSE,
-                      1.,
-                      csrA,
-                      descrA,
-                      SPARSE_LAYOUT_ROW_MAJOR,
-                      O,
-                      rank,   // number of right hand sides
-                      rank,      // ldx
-                      0.,
-                      Y,
-                      rank);
-  assert(mkl_status == SPARSE_STATUS_SUCCESS);
-  std::cout << "compute sample matrix of Y = A^T * O  = A * O done (because A^T = A)" << std::endl;
-  auto spmm_finish = std::chrono::high_resolution_clock::now();
-  std::chrono::duration<float> spmm_elapsed = spmm_finish - spmm_start;
-  std::cout << "Elapsed time (spmm): " << spmm_elapsed.count() << " s" << std::endl;
-  delete[] O;
+    int* tmp = new int[n * rank];
+    parallel_for(0, n, [&] (MKL_INT i) {
+      for (size_t j=0; j<rank; ++j) {
+        tmp[i * rank + j] = j;
+      }
+      // Fisher–Yates_shuffle
+      auto our_seed = seed.fork(i);
+      for (size_t j=0; j<non_zeros_per_row[i]; ++j) {
+        int k = j + our_seed.rand() % (rank - j);
+        our_seed = our_seed.next();
+        std::swap(tmp[i * rank + j], tmp[i * rank + k]);
+        O_col_idx[O_rows_start[i] + j] = static_cast<MKL_INT>(tmp[i * rank + j]);
+        O_value[O_rows_start[i] + j] = (our_seed.rand() % 2 == 0) ? -sqrt(s) : sqrt(s);
+        our_seed = our_seed.next();
+      }
+      if (i == 0) {
+        for (size_t j=0; j<non_zeros_per_row[i]; ++j) {
+            std::cout << i << " " << O_col_idx[O_rows_start[i] + j] << " " << O_value[O_rows_start[i] + j] << std::endl;
+        }
+      }
+    }, 1024);
+    delete[] non_zeros_per_row;
+    delete[] tmp;
+    std::cout << "sampling very sparse random matrix O for A^T done, nnz= " << O_rows_start[n] << std::endl;
+    sparse_matrix_t csrO;
+    std::cout << "calling mkl_sparse_s_create_csr" << std::endl;
+    auto start = std::chrono::high_resolution_clock::now();
+    mkl_status = mklhelper<FP>::mkl_sparse_create_csr(&csrO,
+        SPARSE_INDEX_BASE_ZERO,
+        n,
+        rank,
+        O_rows_start,
+        O_rows_start+1,
+        O_col_idx,
+        O_value);
+    assert(mkl_status == SPARSE_STATUS_SUCCESS);
+    auto finish = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<float> elapsed = finish - start;
+    std::cout << "Elapsed time: " << elapsed.count() << " s" << std::endl;
+    std::cout << "create sparse csr matrix done, status=" << mkl_status << " n= " << n << " rank= " << rank << " nnz= " << O_rows_start[n] << std::endl;
+    
+    struct matrix_descr descrO;
+    descrO.type = SPARSE_MATRIX_TYPE_GENERAL;
+    auto sp2md_start = std::chrono::high_resolution_clock::now();
+    mkl_status = mklhelper<FP>::mkl_sparse_sp2md(SPARSE_OPERATION_NON_TRANSPOSE,
+                        descrA,
+                        csrA,
+                        SPARSE_OPERATION_NON_TRANSPOSE,
+                        descrO,
+                        csrO,
+                        1.0,
+                        0.0,
+                        Y,
+                        SPARSE_LAYOUT_ROW_MAJOR,
+                        n);
+    assert(mkl_status == SPARSE_STATUS_SUCCESS);
+    std::cout << "compute sample matrix of Y = A^T * O  = A * O done (because A^T = A)" << std::endl;
+    auto sp2md_finish = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<float> sp2md_elapsed = sp2md_finish - sp2md_start;
+    std::cout << "Elapsed time (sp2md): " << sp2md_elapsed.count() << " s" << std::endl;
+    mkl_status = mkl_sparse_destroy(csrO);
+    std::cout << "destroy sparse projection matrix done, status=" << mkl_status << std::endl;
+  } else {
+    std::cout << "gaussian random matrix" << std::endl;
+    // compute sample matrix O
+    FP* O = (FP*)mkl_calloc(n * rank, sizeof(FP), ALIGN);
+    util<FP>::standard_normal_vec_BM2(stream, n * rank, O);
+    std::cout << "sampling gaussian random matrix O for A^T done." << std::endl;
+
+    auto spmm_start = std::chrono::high_resolution_clock::now();
+    std::cout << "going to call mkl_sparse_s_mm row major" << std::endl;
+    mkl_status = mklhelper<FP>::mkl_sparse_mm(SPARSE_OPERATION_NON_TRANSPOSE,
+                        1.,
+                        csrA,
+                        descrA,
+                        SPARSE_LAYOUT_ROW_MAJOR,
+                        O,
+                        rank,   // number of right hand sides
+                        rank,      // ldx
+                        0.,
+                        Y,
+                        rank);
+    assert(mkl_status == SPARSE_STATUS_SUCCESS);
+    std::cout << "compute sample matrix of Y = A^T * O  = A * O done (because A^T = A)" << std::endl;
+    auto spmm_finish = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<float> spmm_elapsed = spmm_finish - spmm_start;
+    std::cout << "Elapsed time (spmm): " << spmm_elapsed.count() << " s" << std::endl;
+    mkl_free(O);
+  }
+
+  if (random_project_only) {
+    std::cout << "only random random projected matrix." << std::endl;
+    matU = Y;
+    return;
+  }
   // orthonormalize Y
   std::cout << "going to orthonormalize Y" << std::endl;
   auto gs_start = std::chrono::high_resolution_clock::now();
@@ -155,8 +278,8 @@ void MKLRedSVD<FP>::run() {
   std::cout << "Elapsed time (gram schmidt): " << gs_elapsed.count() << " s" << std::endl;
 
   // compute B = A * Y;
-  FP* B = new FP[n * rank];
-  spmm_start = std::chrono::high_resolution_clock::now();
+  FP* B = (FP*)mkl_calloc(n * rank, sizeof(FP), ALIGN);
+  auto spmm_start = std::chrono::high_resolution_clock::now();
   mkl_status = mklhelper<FP>::mkl_sparse_mm(SPARSE_OPERATION_NON_TRANSPOSE,
                       1.,
                       csrA,
@@ -170,17 +293,17 @@ void MKLRedSVD<FP>::run() {
                       rank);
   assert(mkl_status == SPARSE_STATUS_SUCCESS);
   std::cout << "B = A * Y done, Range(B) = Range(A^T)." << std::endl;
-  spmm_finish = std::chrono::high_resolution_clock::now();
-  spmm_elapsed = spmm_finish - spmm_start;
+  auto spmm_finish = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<float> spmm_elapsed = spmm_finish - spmm_start;
   std::cout << "Elapsed time (spmm): " << spmm_elapsed.count() << " s" << std::endl;
   mkl_sparse_destroy(csrA);
 
   // sample gaussian random matrix P
-  FP* P = new FP[rank * rank];
+  FP* P = (FP*)mkl_calloc(rank * rank, sizeof(FP), ALIGN);
   util<FP>::standard_normal_vec_BM2(stream, rank * rank, P);
   std::cout << "sample another gaussian random matrix P done." << std::endl;
 
-  FP* Z = new FP[n * rank]();
+  FP* Z = (FP*)mkl_calloc(n * rank, sizeof(FP), ALIGN);
   // compute Z = B * P
   auto gemm_start = std::chrono::high_resolution_clock::now();
   mklhelper<FP>::cblas_gemm(
@@ -203,7 +326,7 @@ void MKLRedSVD<FP>::run() {
   auto gemm_finish = std::chrono::high_resolution_clock::now();
   std::chrono::duration<float> gemm_elapsed = gemm_finish - gemm_start;
   std::cout << "Elapsed time (gemm): " << gemm_elapsed.count() << " s" << std::endl;
-  delete[] P;
+  mkl_free(P);
 
   // orthonormalize Z
   gs_start = std::chrono::high_resolution_clock::now();
@@ -214,7 +337,7 @@ void MKLRedSVD<FP>::run() {
   std::cout << "Elapsed time (gram schmidt): " << gs_elapsed.count() << " s" << std::endl;
 
   // compute C = Z.T * B
-  FP* C = new FP[rank * rank]();
+  FP* C = (FP*)mkl_calloc(rank * rank, sizeof(FP), ALIGN);
   gemm_start = std::chrono::high_resolution_clock::now();
   mklhelper<FP>::cblas_gemm(
       CblasRowMajor, // const CBLAS_LAYOUT Layout,
@@ -236,12 +359,12 @@ void MKLRedSVD<FP>::run() {
   gemm_finish = std::chrono::high_resolution_clock::now();
   gemm_elapsed = gemm_finish - gemm_start;
   std::cout << "Elapsed time (gemm): " << gemm_elapsed.count() << " s" << std::endl;
-  delete[] B;
+  mkl_free(B);
 
   // C = U S V^T
-  FP* U = new FP[rank * rank];
-  S = new FP[rank];
-  FP* superb = new FP[rank];
+  FP* U = (FP*)mkl_calloc(rank * rank, sizeof(FP), ALIGN);
+  S = (FP*)mkl_calloc(rank, sizeof(FP), ALIGN);
+  FP* superb = (FP*)mkl_calloc(rank, sizeof(FP), ALIGN);
   auto gesvd_start = std::chrono::high_resolution_clock::now();
   lapack_status = mklhelper<FP>::LAPACKE_gesvd(
       LAPACK_ROW_MAJOR,     // int matrix_layout,
@@ -263,10 +386,10 @@ void MKLRedSVD<FP>::run() {
   auto gesvd_finish = std::chrono::high_resolution_clock::now();
   std::chrono::duration<float> gesvd_elapsed = gesvd_finish - gesvd_start;
   std::cout << "Elapsed time (gesvd): " << gesvd_elapsed.count() << " s" << std::endl;
-  delete[] C;
+  mkl_free(C);
 
   // matU = Z * U
-  matU = new FP[n * rank]();
+  matU = (FP*)mkl_calloc(n * rank, sizeof(FP), ALIGN);
   gemm_start = std::chrono::high_resolution_clock::now();
   mklhelper<FP>::cblas_gemm(
       CblasRowMajor, // const CBLAS_LAYOUT Layout,

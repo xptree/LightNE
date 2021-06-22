@@ -27,7 +27,7 @@ void save(const std::string& file, FP* emb, size_t n, size_t d) {
 }
 
 template <class Graph>
-double LightNE_runner(Graph& GA, commandLine P) {
+double LightNE_mkl_runner(Graph& GA, commandLine P) {
   size_t walks_per_edge = static_cast<size_t>(P.getOptionLongValue("-walksperedge", 100));
   size_t walk_len = static_cast<size_t>(P.getOptionLongValue("-walklen", 10));
   size_t table_size = static_cast<size_t>(P.getOptionLongValue("-tablesz", 0));
@@ -45,6 +45,9 @@ double LightNE_runner(Graph& GA, commandLine P) {
   std::string ne_out = P.getOptionValue("-ne_out", "");
   std::string pro_out = P.getOptionValue("-pro_out", "");
   std::string step_coeff_str = P.getOptionValue("-step_coeff", "1,1,1,1,1,1,1,1,1,1");
+  bool random_project_only = static_cast<bool>(P.getOptionLongValue("-random_project_only", 0));
+  bool sparse_project = static_cast<bool>(P.getOptionLongValue("-sparse_project", 0));
+  float sparse_project_s = static_cast<float>(P.getOptionDoubleValue("-sparse_project_s", 100.0));
 
   std::vector<float> step_coeff;
   std::stringstream ss(step_coeff_str);
@@ -58,7 +61,7 @@ double LightNE_runner(Graph& GA, commandLine P) {
   assert(ne_method == "netsmf" || ne_method == "ne_zhang_et_al");
   assert(step_coeff.size() == walk_len);
 
-  std::cout << "### Application: LigNE_mkl" << std::endl;
+  std::cout << "### Application: LightNE_mkl" << std::endl;
   std::cout << "### Graph: " << P.getArgument(0) << std::endl;
   std::cout << "### Threads: " << num_workers() << std::endl;
   std::cout << "### n: " << GA.n << std::endl;
@@ -78,6 +81,9 @@ double LightNE_runner(Graph& GA, commandLine P) {
   std::cout << "###  -normalize = " << normalize << std::endl;
   std::cout << "###  -sample_ratio = " << sample_ratio << std::endl;
   std::cout << "###  -mem_ratio = " << mem_ratio << std::endl;
+  std::cout << "###  -random_project_only = " << random_project_only << std::endl;
+  std::cout << "###  -sparse_project = " << sparse_project << std::endl;
+  std::cout << "###  -sparse_project_s = " << sparse_project_s << std::endl;
   std::cout << "###  -ne_out = " << ne_out       << std::endl;
   std::cout << "###  -pro_out = " << pro_out       << std::endl;
   std::cout << "###  -step_coeff = ";
@@ -95,7 +101,7 @@ double LightNE_runner(Graph& GA, commandLine P) {
   std::cout << "# using float point type " << typeid(FP).name() << " (f for float, d for double)" << std::endl;
   FP* emb = NULL;
   if (ne_method == "netsmf") {
-    emb = path_embed::NetSMF<Graph, FP>(GA, walks_per_edge, walk_len, upper, sample, rank, dim, analyze, table_size, negative, normalize, sample_ratio, mem_ratio, step_coeff);
+    emb = path_embed::NetSMF<Graph, FP>(GA, walks_per_edge, walk_len, upper, sample, rank, dim, analyze, table_size, negative, normalize, sample_ratio, mem_ratio, step_coeff, random_project_only, sparse_project, sparse_project_s);
   } else {
     emb = path_embed::NE_Zhang_et_al<Graph, FP>(GA, rank, dim);
   }
@@ -115,4 +121,4 @@ double LightNE_runner(Graph& GA, commandLine P) {
   return tt;
 }
 
-generate_symmetric_main(LightNE_runner, false);
+generate_symmetric_main(LightNE_mkl_runner, false);

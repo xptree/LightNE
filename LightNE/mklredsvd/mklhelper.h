@@ -30,6 +30,11 @@ struct mklhelper<float> {
   static sparse_status_t mkl_sparse_mm(const sparse_operation_t operation, const float alpha, const sparse_matrix_t A, const struct matrix_descr descr, const sparse_layout_t layout, const float *x, const MKL_INT columns, const MKL_INT ldx, const float beta, float *y, const MKL_INT ldy) {
     return mkl_sparse_s_mm(operation, alpha, A, descr, layout, x, columns, ldx, beta, y, ldy);
   }
+
+  static sparse_status_t mkl_sparse_sp2md(const sparse_operation_t transA, const struct matrix_descr descrA, const sparse_matrix_t A, const sparse_operation_t transB, const struct matrix_descr descrB, const sparse_matrix_t B, const float alpha, const float beta, float *C, const sparse_layout_t layout, const MKL_INT ldc ) {
+    return mkl_sparse_s_sp2md(transA, descrA, A, transB, descrB, B, alpha, beta, C, layout, ldc );
+  }
+
   static void cblas_gemm(const CBLAS_LAYOUT Layout, const CBLAS_TRANSPOSE transa, const CBLAS_TRANSPOSE transb, const MKL_INT m, const MKL_INT n, const MKL_INT k, const float alpha, const float *a, const MKL_INT lda, const float *b, const MKL_INT ldb, const float beta, float *c, const MKL_INT ldc) {
     cblas_sgemm(Layout, transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
   }
@@ -81,6 +86,10 @@ struct mklhelper<double> {
 
   static sparse_status_t mkl_sparse_mm(const sparse_operation_t operation, const double alpha, const sparse_matrix_t A, const struct matrix_descr descr, const sparse_layout_t layout, const double *x, const MKL_INT columns, const MKL_INT ldx, const double beta, double *y, const MKL_INT ldy) {
     return mkl_sparse_d_mm(operation, alpha, A, descr, layout, x, columns, ldx, beta, y, ldy);
+  }
+
+  static sparse_status_t mkl_sparse_sp2md(const sparse_operation_t transA, const struct matrix_descr descrA, const sparse_matrix_t A, const sparse_operation_t transB, const struct matrix_descr descrB, const sparse_matrix_t B, const double alpha, const double beta, double *C, const sparse_layout_t layout, const MKL_INT ldc) {
+    return mkl_sparse_d_sp2md(transA, descrA, A, transB, descrB, B, alpha, beta, C, layout, ldc );
   }
 
   static void cblas_gemm(const CBLAS_LAYOUT Layout, const CBLAS_TRANSPOSE transa, const CBLAS_TRANSPOSE transb, const MKL_INT m, const MKL_INT n, const MKL_INT k, const double alpha, const double *a, const MKL_INT lda, const double *b, const MKL_INT ldb, const double beta, double *c, const MKL_INT ldc) {
