@@ -214,20 +214,8 @@ void MKLRedSVD<FP>::run() {
     std::cout << "Elapsed time: " << elapsed.count() << " s" << std::endl;
     std::cout << "create sparse csr matrix done, status=" << mkl_status << " n= " << n << " rank= " << rank << " nnz= " << O_rows_start[n] << std::endl;
     
-    struct matrix_descr descrO;
-    descrO.type = SPARSE_MATRIX_TYPE_GENERAL;
     auto sp2md_start = std::chrono::high_resolution_clock::now();
-    mkl_status = mklhelper<FP>::mkl_sparse_sp2md(SPARSE_OPERATION_NON_TRANSPOSE,
-                        descrA,
-                        csrA,
-                        SPARSE_OPERATION_NON_TRANSPOSE,
-                        descrO,
-                        csrO,
-                        1.0,
-                        0.0,
-                        Y,
-                        SPARSE_LAYOUT_ROW_MAJOR,
-                        n);
+	mkl_status = mklhelper<FP>::mkl_sparse_spmmd(SPARSE_OPERATION_NON_TRANSPOSE,csrA,csrO,SPARSE_LAYOUT_ROW_MAJOR,Y,rank);
     assert(mkl_status == SPARSE_STATUS_SUCCESS);
     std::cout << "compute sample matrix of Y = A^T * O  = A * O done (because A^T = A)" << std::endl;
     auto sp2md_finish = std::chrono::high_resolution_clock::now();
