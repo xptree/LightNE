@@ -123,6 +123,8 @@ if __name__ == "__main__":
             help="input file path for labels (.mat)")
     parser.add_argument("--embedding", type=str, required=True,
             help="input file path for embedding (.npy)")
+    #parser.add_argument("--embedding2", type=str, required=True,
+    #        help="input file path for embedding (.npy)")
     parser.add_argument("--matfile-variable-name", type=str, default='group',
             help='variable name of adjacency matrix inside a .mat file.')
     parser.add_argument("--seed", type=int, required=True,
@@ -157,6 +159,8 @@ if __name__ == "__main__":
     logger.info("Loading network embedding from %s...", args.embedding)
     if args.binary:
         embedding = np.fromfile(args.embedding, dtype=np.float32).reshape(-1, args.dim)
+        #embedding2 = np.fromfile(args.embedding2, dtype=np.float32).reshape(-1, args.dim)
+        #embedding = (embedding + embedding2) / 2
     else:
         ext = os.path.splitext(args.embedding)[1]
         if ext == ".npy":

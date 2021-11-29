@@ -3,7 +3,7 @@
 #include <tuple>
 #include <cassert>
 
-#include "bridge.h"
+#include "ligra/bridge.h"
 
 template <class K, class V, class H>
 class par_table {
@@ -20,6 +20,13 @@ class par_table {
 
   size_t size() {
     return m;
+  }
+
+  void copy_table(T* table2){
+    std::cout<<"m:"<<m<<std::endl;
+    parallel_for(0, m, [&] (size_t i) {
+      table[i] = table2[i];
+    });
   }
 
   static void clearA(T* A, long n, T kv) {
