@@ -12,14 +12,16 @@ ifdef EDGELONG
 INTE = -DEDGELONG
 endif
 
+WARNINGS = -Wno-deprecated-declarations -Wno-sign-compare -Wno-unused-variable
+
 # If you install intel mkl directly, then you need to set something like:
-INCLUDE_DIRS = -I../ -I/opt/intel/mkl/include
+INCLUDE_DIRS = -I/opt/intel/mkl/include -I../ -I../ligra -I./mklfunction
 LINK_DIRS = -L"/opt/intel/mkl/lib/intel64"
 
-OPT = -O3 -DNDEBUG #-g
-#OPT = -O0 -g
+OPT = -O3 -DNDEBUG -DMKL_ILP64 -m64#-g
+#OPT = -O0 -g -DMKL_ILP64 -m64
 
-CFLAGS = $(INCLUDE_DIRS) -I../ligra -I./mklredsvd -mcx16 -ldl -std=c++17 -march=native -Wall $(OPT) $(INTT) $(INTE) -Wl,--no-as-needed -DMKL_ILP64 -DAMORTIZEDPD $(CONCEPTS) -DUSEMALLOC $(LINK_DIRS) -lmkl_intel_ilp64 -lmkl_core -lmkl_gnu_thread -liomp5 -lpthread -lm
+CFLAGS = $(INCLUDE_DIRS) -mcx16 -ldl -std=c++17 -march=native -Wall $(WARNINGS) $(OPT) $(INTT) $(INTE) -Wl,--no-as-needed -DAMORTIZEDPD $(CONCEPTS) -DUSEMALLOC $(LINK_DIRS) -lmkl_intel_ilp64 -lmkl_core -lmkl_gnu_thread -liomp5 -lpthread -lm
 
 
 OMPFLAGS = -DOPENMP -fopenmp
@@ -43,7 +45,7 @@ CC = g++
 PFLAGS =
 else # default is homegrown
 CC = g++
-PFLAGS = $(HGFLAGS)
+PFLAGS = $(OMPFLAGS)
 endif
 
 ALL= LightNE
@@ -51,7 +53,7 @@ ALL= LightNE
 all: $(ALL)
 
 % : %.cc
-	$(CC) $(CFLAGS) $(PFLAGS) mklredsvd/mklhelper.h mklredsvd/util.cc -o $@ $<
+	$(CC) $< $(CFLAGS) $(PFLAGS) -o $@
 
 .PHONY : clean
 

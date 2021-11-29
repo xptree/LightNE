@@ -7,14 +7,16 @@
 #include "pbbslib/binary_search.h"
 #include "pbbslib/sample_sort.h"
 #include "par_table.h"
-#include "maybe.h"
+#include "ligra/maybe.h"
 
 #include "ligra/edge_map_reduce.h"
 #include "ligra/graph_mutation.h"
 
 #include <math.h>
-#include "MKLSVD.h"
-#define EPS 1e-5
+//#include "MKLSVD.h"
+#include "mklfunction/mklfrsvds.h"
+#include "mklfunction/mklutil.h"
+#include "spectral_propagation.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -22,13 +24,15 @@
 #include <vector>
 #include <algorithm>
 
+using namespace mkl_frsvds;
+using namespace mkl_util;
+
 #define TWO63 0x8000000000000000u
 #define TWO64f (TWO63*2.0)
 double map_uint64_t(uint64_t u) {
   double y = (double) u;
   return y/TWO64f;
 }
-
 
 namespace path_embed {
   using K = size_t;
@@ -78,6 +82,7 @@ namespace path_embed {
     return std::move(edges);
   }
 
+
   template <class Graph, typename FP>
   auto generate_trunc_log_matrix_v2(Graph& GA,
       pbbs::random seed, size_t walks_per_edge, size_t walk_len, bool upper, bool sample, size_t table_size, size_t negative, float sample_ratio,
@@ -88,7 +93,7 @@ namespace path_embed {
     size_t m = GA.m;
     double logn = log(n);
     std::cout << "# logn = " << logn << " sample_ratio = " << sample_ratio << " mem_ratio = " << mem_ratio << std::endl;
-
+    
     using T = std::tuple<K, V>;
     auto empty = std::make_tuple(std::numeric_limits<size_t>::max(), static_cast<V>(0));
     // if (sample) {
@@ -249,7 +254,7 @@ namespace path_embed {
       size_t sparsifier_nnz = pbbs::reduce(sparsifier_entries_count, pbbs::addm<size_t>());
       std::cout << "# nnz in sparsifier = " << sparsifier_nnz << std::endl;
 
-      // dangerous
+      // dangerous???
       timer st; st.start();
       std::cout << "# scan Hash table" << std::endl;
       size_t table_size = HT.size();
@@ -368,50 +373,12 @@ namespace path_embed {
     return sparsifier_final;
   }
 
-  template <typename FP>
-  FP* compute_u_sigma_root(FP* U, FP* S, size_t n, size_t rank, size_t dim, bool normalize, FP alpha=0.0) {
-    if (S) {
-      std::cout << "# computing u*sqrt(sigma), sigma(0)=" << S[0] << ", sigma(" << dim-1 << ")=" << S[dim-1] << std::endl;
-    } else {
-      std::cout << "S is NULL" << std::endl;
-    }
-    FP* emb = new FP[n*dim]();
-    parallel_for(0, dim, [&] (size_t i) {
-      FP filtered_sigma = S ? S[i]: 1.0;
-      mklhelper<FP>::cblas_axpy(
-          n,                     // const MKL_INT n,
-          sqrt(filtered_sigma),  // const float a,
-          U+i,                   // const float *x,
-          rank,                  // const MKL_INT incx,
-          emb+i,                 // float *y,
-          dim                    // const MKL_INT incy
-      );
-    });
-    if (normalize) {
-      parallel_for(0, n, [&] (size_t i) {
-          FP norm = mklhelper<FP>::cblas_nrm2(
-              dim,        // const MKL_INT n,
-              emb+i*dim,  // const float *x,
-              1           // const MKL_INT incx,
-          );
-          if (norm > EPS) {
-              mklhelper<FP>::cblas_scal(
-                dim,        // const MKL_INT n,
-                1.0/norm,   // const float a,
-                emb+i*dim,  // const float *x,
-                1           // const MKL_INT incx,
-              );
-          }
-      });
-    }
-    return emb;
-  }
-
   template <class Graph, typename FP>
-  FP* NE_Zhang_et_al(Graph& GA, size_t rank, size_t dim) {
+  mat<FP>* NE_Zhang_et_al(Graph& GA, size_t rank, size_t dim, bool random_project_only, size_t sparse_project, float sparse_project_s, size_t power_iteration, size_t oversampling, bool analyze, bool upper) {
     using W = typename Graph::weight_type;
     auto offs = pbbs::sequence<MKL_INT>(GA.n+1, [&] (size_t i) { return i==GA.n ? 0 : GA.get_vertex(i).getInDegree(); });
     size_t m = pbbslib::scan_add_inplace(offs.slice());
+    size_t n = GA.n;
     assert(GA.m == m);
     // MKL_INT* row_idx = new MKL_INT[GA.m];
     MKL_INT* col_idx = new MKL_INT[GA.m];
@@ -446,18 +413,18 @@ namespace path_embed {
     timer t_svd; t_svd.start();
     MKL_INT* rows_start = offs.to_array();
     MKL_INT* rows_end = rows_start + 1;
-    mkl_redsvd::MKLRedSVD<FP> svdOfA(GA.n,
-        // row_idx, col_idx, value,
-        rows_start, rows_end, col_idx, value,
-        false, // upper
-        rank,
-        true, // analyze
-        false, // random project only
-        false, // sparse_project
-        0.0
-        );
-    svdOfA.run();
-    FP* emb = compute_u_sigma_root<FP>(svdOfA.matU, svdOfA.S, GA.n, rank, dim, true, 0.0);
+    mat_csr<FP> *csr_A = new mat_csr<FP>;
+    csr_A->nrows = n;
+    csr_A->ncols = n;
+    csr_A->nnz = m;
+    csr_A->values = value;
+    csr_A->cols = col_idx;
+    csr_A->pointerB = rows_start;
+    csr_A->pointerE = rows_end;
+    MKLfrsvds<FP> frsvdsofA(csr_A,rank,power_iteration,oversampling,upper,analyze,random_project_only,sparse_project,sparse_project_s);
+    frsvdsofA.run();
+    mat<FP>* emb = util<FP>::matrix_new(n,dim);
+    spectral_propagation::compute_u_sigma_root<FP>(frsvdsofA.matU,frsvdsofA.S, emb, dim, true);
     t_svd.stop(); t_svd.reportTotal("# svd time");
     return emb;
   }
@@ -492,13 +459,13 @@ namespace path_embed {
   }
 
   template <class Graph, typename FP>
-  FP* NetSMF(Graph& GA, size_t walks_per_edge, size_t walk_len, bool upper, bool sample, size_t rank, size_t dim, bool analyze, size_t table_size, size_t negative, bool normalize, float sample_ratio, float mem_ratio, const std::vector<float>& step_coeff, bool random_project_only, bool sparse_project, float sparse_project_s) {
+  mat<FP>* NetSMF(Graph& GA, size_t walks_per_edge, size_t walk_len, bool upper, bool sample, size_t rank, size_t dim, bool analyze, size_t table_size, size_t negative, bool normalize, float sample_ratio, float mem_ratio, const std::vector<float>& step_coeff, bool random_project_only, size_t sparse_project, float sparse_project_s, size_t power_iteration,size_t oversampling) {
 
     MKL_INT n = static_cast<MKL_INT>(GA.n);
     timer t_path_sampling; t_path_sampling.start();
     size_t seed = time(0);
     std::cout << "# seed = " << seed << std::endl;
-
+    
     bool csr = true;
     MKL_INT* rows_start = NULL;
     MKL_INT* col_idx = NULL;
@@ -547,17 +514,19 @@ namespace path_embed {
     MKL_INT* rows_end = rows_start + 1;
 
     timer t_svd; t_svd.start();
-    // mkl_redsvd::MKLRedSVD<FP> svdOfA(n, nnz, row_idx, col_idx, value, upper, rank, analyze);
-    mkl_redsvd::MKLRedSVD<FP> svdOfA(n,
-        rows_start, rows_end,
-        col_idx, value, upper, rank, analyze,
-        random_project_only,
-        sparse_project,
-        sparse_project_s
-        );
-    svdOfA.run();
-
-    FP* emb = compute_u_sigma_root<FP>(svdOfA.matU, svdOfA.S, n, rank, dim, normalize, 0.0);
+    size_t num_directed_edges = edges.size();
+    mat_csr<FP> *csr_A = new mat_csr<FP>;
+    csr_A->nrows = n;
+    csr_A->ncols = n;
+    csr_A->nnz = num_directed_edges;
+    csr_A->values = value;
+    csr_A->cols = col_idx;
+    csr_A->pointerB = rows_start;
+    csr_A->pointerE = rows_end;
+    MKLfrsvds<FP> frsvdsofA(csr_A,rank,power_iteration,oversampling,upper,analyze,random_project_only,sparse_project,sparse_project_s);
+    frsvdsofA.run();
+    mat<FP>* emb = util<FP>::matrix_new(n,dim);
+    spectral_propagation::compute_u_sigma_root<FP>(frsvdsofA.matU, frsvdsofA.S, emb, dim, normalize);
     t_svd.stop(); t_svd.reportTotal("# svd time");
     return emb;
   }

@@ -13,14 +13,17 @@
 #include <typeinfo>
 #include <vector>
 #include "PathEmbed.h"
-#include "SpectralPropagation.h"
+#include "spectral_propagation.hpp"
+
+using namespace mkl_frsvds;
+using namespace mkl_util;
 
 template <typename FP>
-void save(const std::string& file, FP* emb, size_t n, size_t d) {
+void save(const std::string& file, mat<FP>* emb, size_t n, size_t d) {
   timer t_save; t_save.start();
 	// write buffer to file
 	if(std::FILE* f = std::fopen(file.c_str(), "wb")) {
-			std::fwrite(emb, sizeof(FP), n*d, f);
+			std::fwrite(emb->d, sizeof(FP), n*d, f);
 			std::fclose(f);
 	}
   t_save.stop(); t_save.reportTotal("save time");
@@ -46,8 +49,10 @@ double LightNE_mkl_runner(Graph& GA, commandLine P) {
   std::string pro_out = P.getOptionValue("-pro_out", "");
   std::string step_coeff_str = P.getOptionValue("-step_coeff", "1,1,1,1,1,1,1,1,1,1");
   bool random_project_only = static_cast<bool>(P.getOptionLongValue("-random_project_only", 0));
-  bool sparse_project = static_cast<bool>(P.getOptionLongValue("-sparse_project", 0));
+  size_t sparse_project = static_cast<size_t>(P.getOptionLongValue("-sparse_project", 0));
   float sparse_project_s = static_cast<float>(P.getOptionDoubleValue("-sparse_project_s", 100.0));
+  size_t power_iteration = static_cast<size_t>(P.getOptionLongValue("-power_iteration", 1));
+  size_t oversampling = static_cast<size_t>(P.getOptionLongValue("-oversampling", 10));
 
   std::vector<float> step_coeff;
   std::stringstream ss(step_coeff_str);
@@ -82,8 +87,10 @@ double LightNE_mkl_runner(Graph& GA, commandLine P) {
   std::cout << "###  -sample_ratio = " << sample_ratio << std::endl;
   std::cout << "###  -mem_ratio = " << mem_ratio << std::endl;
   std::cout << "###  -random_project_only = " << random_project_only << std::endl;
-  std::cout << "###  -sparse_project = " << sparse_project << std::endl;
-  std::cout << "###  -sparse_project_s = " << sparse_project_s << std::endl;
+  std::cout << "###  -sparse_project = " << sparse_project << " (0 represents gaussian random projection, 1 represents very sparse random projection and 2 represents sparse sign random projection)" << std::endl;
+  std::cout << "###  -sparse_project_s = " << sparse_project_s << " (when sparse_project >=1, and sparse_project_s is the sparse parameter for very sparse random projection or column sparsity of the sparse sign random projection)" << std::endl;
+  std::cout << "###  -power_iteration = " << power_iteration  << std::endl;
+  std::cout << "###  -oversampling = " << oversampling  << std::endl;
   std::cout << "###  -ne_out = " << ne_out       << std::endl;
   std::cout << "###  -pro_out = " << pro_out       << std::endl;
   std::cout << "###  -step_coeff = ";
@@ -99,11 +106,11 @@ double LightNE_mkl_runner(Graph& GA, commandLine P) {
 
   using FP = float;
   std::cout << "# using float point type " << typeid(FP).name() << " (f for float, d for double)" << std::endl;
-  FP* emb = NULL;
+  mat<FP>* emb = NULL;
   if (ne_method == "netsmf") {
-    emb = path_embed::NetSMF<Graph, FP>(GA, walks_per_edge, walk_len, upper, sample, rank, dim, analyze, table_size, negative, normalize, sample_ratio, mem_ratio, step_coeff, random_project_only, sparse_project, sparse_project_s);
+    emb = path_embed::NetSMF<Graph, FP>(GA, walks_per_edge, walk_len, upper, sample, rank, dim, analyze, table_size, negative, normalize, sample_ratio, mem_ratio, step_coeff, random_project_only, sparse_project, sparse_project_s,power_iteration,oversampling);
   } else {
-    emb = path_embed::NE_Zhang_et_al<Graph, FP>(GA, rank, dim);
+    emb = path_embed::NE_Zhang_et_al<Graph, FP>(GA, rank, dim,  random_project_only, sparse_project, sparse_project_s, power_iteration, oversampling, analyze, upper);
   }
   if (ne_out.size() > 0) {
     std::cout << "dump network embedding to " << ne_out << std::endl;
@@ -111,10 +118,10 @@ double LightNE_mkl_runner(Graph& GA, commandLine P) {
   }
   if (pro_out.size() > 0) {
     timer t_pro; t_pro.start();
-    FP* pronemb = spectral_propagation::chebyshev_expansion<Graph, FP>(emb, GA, dim, dim, order, 0.2, 0.5);
+    spectral_propagation::chebyshev_expansion<Graph, FP>(emb, GA, order, 0.5, 0.2);
     t_pro.stop(); t_pro.reportTotal("proX time");
     std::cout << "dump proX embedding to " << pro_out << std::endl;
-    save<FP>(pro_out, pronemb, GA.n, dim);
+    save<FP>(pro_out, emb, GA.n, dim);
   }
   double tt =  t.stop();
   std::cout << "### Running Time: " << tt << std::endl;
