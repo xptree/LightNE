@@ -29,6 +29,6 @@ fi
 
 (/usr/bin/time -p numactl -i all $EXE -walksperedge 10000 -walklen 10 -rounds 1 -s -m \
   -ne_out $NEOUT -pro_out $PROOUT -ne_method netsmf -rank 4096 -dim 128 -order 10 \
-  -analyze 1 -sample 0 -upper 0 -tablesz 6679660000 $INPUT ) |& tee -a blog_lightne.log
+  -analyze 1 -sample 1 -sample_ratio 2000 -upper 0 -tablesz 6679660000 $INPUT ) |& tee -a blog_lightne.log
 
 python predict.py --label $LABEL --embedding $PROOUT --seed 0 --C 10 --start-train-ratio 10 --stop-train-ratio 90 --num-train-ratio 9 --binary --dim 128
