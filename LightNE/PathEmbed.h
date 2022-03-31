@@ -79,6 +79,42 @@ namespace path_embed {
   }
 
   template <class Graph, typename FP>
+  void gbbs_spmmd(Graph& GA, const FP* X, FP* Y, const MKL_INT d, bool normalize) {
+    // assume X and Y both have shape GA.n x d, and both stored in row major format
+    /* 
+    Y[i,j] = sum_{k} A[i,k] X[k,j]
+           = sum_{e=(i,k)} A[i,k] X[k,j]
+    */
+    using W = typename Graph::weight_type;
+    parallel_for(0, GA.n, [&] (size_t i) {
+      FP factor = 1.0;
+      if (normalize) {
+        factor /= sqrt(GA.get_vertex(i).getOutDegree());
+      }
+      auto map_f = [&] (const uintE& u, const uintE& v, const W& wgh) {
+        FP factor_new = factor;
+        if (normalize) {
+          factor_new /= sqrt(GA.get_vertex(v).getOutDegree());
+        }
+        cblas_axpy(
+          d, 
+          factor_new, 
+          X + u * d, 
+          1, 
+          Y + v * d, 
+          1);
+        /*
+        The above cblas_axpy is equivalent to
+        for (size_t j=0; j<d; ++j) {
+          Y[u * d + j] += factor_new * X[v * d + j]
+        }
+        */
+      };
+      GA.get_vertex(i).mapOutNgh(i, map_f, false);
+    });
+  }
+
+  template <class Graph, typename FP>
   auto generate_trunc_log_matrix_v2(Graph& GA,
       pbbs::random seed, size_t walks_per_edge, size_t walk_len, bool upper, bool sample, size_t table_size, size_t negative, float sample_ratio,
       float mem_ratio, const std::vector<float>& step_coeff, MKL_INT*& rows_start, MKL_INT*& col_idx, FP*& value) {

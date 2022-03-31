@@ -16,6 +16,11 @@ In the spectral propagation step, we need modified Bessel functions of the first
 sudo apt-get install libboost-dev
 ```
 
+If we are using yum, you may need:
+```
+sudo yum install boost-devel
+```
+
 ### Install Intel MKL
 
 There are two ways to install Intel MKL. 
