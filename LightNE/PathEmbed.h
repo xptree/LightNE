@@ -23,6 +23,7 @@
 #include <random>
 #include <vector>
 #include <algorithm>
+#include "alias_method.hpp"
 
 using namespace mkl_frsvds;
 using namespace mkl_util;
@@ -87,7 +88,6 @@ namespace path_embed {
   auto generate_trunc_log_matrix_v2(Graph& GA,
       pbbs::random seed, size_t walks_per_edge, size_t walk_len, bool upper, bool sample, size_t table_size, size_t negative, float sample_ratio,
       float mem_ratio, const std::vector<float>& step_coeff, MKL_INT*& rows_start, MKL_INT*& col_idx, FP*& value) {
-
     using W = typename Graph::weight_type;
     size_t n = GA.n;
     size_t m = GA.m;
@@ -129,6 +129,7 @@ namespace path_embed {
                     static_cast<size_t>(std::max(x,z));
       HT.insert_add(std::make_tuple(key, w));
     };
+    discrete_random_variable drv(step_coeff);
     timer t; t.start();
     auto g_map_f = [&] (const uintE& u, const uintE& v, const W& wgh) {
       //1. generate exp r.v. seeded by (u,v)
@@ -143,12 +144,21 @@ namespace path_embed {
       // our_seed = our_seed.next();
       // std::discrete_distribution<uintE> distribution(step_coeff.begin(), step_coeff.end());
 
+      
       if (!sample) {
         // Apply the sampler to this edge exp_rv many times
         for (size_t k=0; k<exp_rv; k++) {
           // uintE r = distribution(generator) + 1;
-          uintE r = our_seed.rand() % walk_len + 1;
+          
+          // sample from a discrete distribution via alias method
+          const size_t idx = static_cast<size_t>(our_seed.rand()) % step_coeff.size();
           our_seed = our_seed.next();
+          double real_dis = static_cast<double>(map_uint64_t(our_seed.rand()));
+          our_seed = our_seed.next();
+          uintE r = drv.sample(idx, real_dis) + 1;
+
+          // uintE r = our_seed.rand() % walk_len + 1;
+          // our_seed = our_seed.next();
           auto [x, z] = path_sample(GA, u, v, our_seed, r);
           emit_ht(x, z, static_cast<V>(1));
         }
@@ -166,8 +176,16 @@ namespace path_embed {
           our_seed = our_seed.next();
           if (eff_prob < approx_effective_resistance) {
             // uintE r = distribution(generator) + 1;
-            uintE r = our_seed.rand() % walk_len + 1;
+            
+            // sample from a discrete distribution via alias method
+            const size_t idx = static_cast<size_t>(our_seed.rand()) % step_coeff.size();
             our_seed = our_seed.next();
+            double real_dis = static_cast<double>(map_uint64_t(our_seed.rand()));
+            our_seed = our_seed.next();
+            uintE r = drv.sample(idx, real_dis) + 1;
+
+            // uintE r = our_seed.rand() % walk_len + 1;
+            // our_seed = our_seed.next();
             auto [x, z] = path_sample(GA, u, v, our_seed, r);
             emit_ht(x, z, static_cast<V>(ipw));
           }
