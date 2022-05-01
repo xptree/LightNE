@@ -10,7 +10,7 @@ namespace mkl_frsvds {
 template <typename FP>
 class MKLfrsvds {
 public:
-  MKLfrsvds(mkl_util::mat_csr<FP> *A,MKL_INT rank,MKL_INT q,MKL_INT s,bool upper,bool analyze, bool random_project_only, size_t sparse_project, float sparse_project_s);
+  MKLfrsvds(mkl_util::mat_csr<FP> *A,MKL_INT rank,MKL_INT q,MKL_INT s,bool upper,bool analyze,bool sparse_project);
   ~MKLfrsvds();
   void run();
   mkl_util::mat<FP> *S;
@@ -22,9 +22,7 @@ private:
   MKL_INT n, rank, q, s;
   bool upper;
   bool analyze;
-  bool random_project_only;
-  size_t sparse_project;
-  float sparse_project_s;
+  bool sparse_project;
 };
 
 } // namespace mkl_frsvds

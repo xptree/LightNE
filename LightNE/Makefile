@@ -15,7 +15,7 @@ endif
 WARNINGS = -Wno-deprecated-declarations -Wno-sign-compare -Wno-unused-variable
 
 # If you install intel mkl directly, then you need to set something like:
-INCLUDE_DIRS = -I/opt/intel/mkl/include -I../ -I../ligra -I./mklfunction
+INCLUDE_DIRS = -I/opt/intel/mkl/include -I../ -I./ -I../ligra -I./mklfunction
 LINK_DIRS = -L"/opt/intel/mkl/lib/intel64"
 
 OPT = -O3 -DNDEBUG -DMKL_ILP64 -m64#-g

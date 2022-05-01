@@ -1,9 +1,12 @@
-# LightNE
+# LightNE 2.0
 
-Code for SIGMOD 2021 submission *LightNE: A Lightweight Graph Processing System for Network Embedding*.
+<!--Code for 2022 TKDE submission *Towards Lightweight and Automated
+Representation Learning System for Networks*.-->
 
-LightNE algorithm is in the LightNE directory.
+LightNE 2.0 algorithm is in the LightNE directory.
 
+## New Features
+(1) It combines a fast randomized SVD algorithm, which is not only faster but also more accurate than the vanilla randomized SVD in LightNE; (2) It provides a tuning script with AutoML library FLAML to further improve overall performance;
 
 ## Dependencies Installation
 
@@ -107,4 +110,8 @@ Besides BlogCatalog, You can run `youtube_lightne.sh`, `mag_lightne.sh` for each
 
 * ClueWeb graph can be downloaded from [here](http://law.di.unimi.it/webdata/clueweb12/).
 * Hyperlink2014 graph can be downloaded from [here](http://webdatacommons.org/hyperlinkgraph/2014-04/download.html).
+
+
+
+
 

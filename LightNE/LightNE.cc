@@ -13,6 +13,7 @@
 #include <typeinfo>
 #include <vector>
 #include "PathEmbed.h"
+//#include "SpectralPropagation.h"
 #include "spectral_propagation.hpp"
 
 using namespace mkl_frsvds;
@@ -37,6 +38,8 @@ double LightNE_mkl_runner(Graph& GA, commandLine P) {
   size_t rank = static_cast<size_t>(P.getOptionLongValue("-rank", 256));
   size_t dim = static_cast<size_t>(P.getOptionLongValue("-dim", 128));
   size_t order = static_cast<size_t>(P.getOptionLongValue("-order", 10));
+  float theta = static_cast<float>(P.getOptionDoubleValue("-theta", 0.5));
+  float mu = static_cast<float>(P.getOptionDoubleValue("-mu", 0.2));
   size_t negative = static_cast<size_t>(P.getOptionLongValue("-negative", 1));
   bool upper = static_cast<bool>(P.getOptionLongValue("-upper", 0));
   bool sample = static_cast<bool>(P.getOptionLongValue("-sample", 0));
@@ -49,18 +52,20 @@ double LightNE_mkl_runner(Graph& GA, commandLine P) {
   std::string pro_out = P.getOptionValue("-pro_out", "");
   std::string step_coeff_str = P.getOptionValue("-step_coeff", "1,1,1,1,1,1,1,1,1,1");
   bool random_project_only = static_cast<bool>(P.getOptionLongValue("-random_project_only", 0));
-  size_t sparse_project = static_cast<size_t>(P.getOptionLongValue("-sparse_project", 0));
+  bool sparse_project = static_cast<bool>(P.getOptionLongValue("-sparse_project", 0));
   float sparse_project_s = static_cast<float>(P.getOptionDoubleValue("-sparse_project_s", 100.0));
   size_t power_iteration = static_cast<size_t>(P.getOptionLongValue("-power_iteration", 1));
   size_t oversampling = static_cast<size_t>(P.getOptionLongValue("-oversampling", 10));
 
   std::vector<float> step_coeff;
   std::stringstream ss(step_coeff_str);
+  double sum = 0;
   while (ss.good()) {
     std::string substr;
     std::getline(ss, substr, ',');
     float coeff = std::stof(substr);
     step_coeff.push_back(coeff);
+    sum+=coeff;
   }
 
   assert(ne_method == "netsmf" || ne_method == "ne_zhang_et_al");
@@ -78,17 +83,19 @@ double LightNE_mkl_runner(Graph& GA, commandLine P) {
   std::cout << "###  -rank = " << rank       << std::endl;
   std::cout << "###  -dim = " << dim       << std::endl;
   std::cout << "###  -order = " << order       << std::endl;
+  std::cout << "###  -theta = " << theta << std::endl;
+  std::cout << "###  -mu = " << mu << std::endl;
   std::cout << "###  -negative = " << negative       << std::endl;
   std::cout << "###  -upper = " << std::boolalpha << upper       << std::endl;
   std::cout << "###  -sample = " << std::boolalpha << sample       << std::endl;
   std::cout << "###  -analyze = " << std::boolalpha << analyze << std::endl;
-  std::cout << "###  -ne_method = " << ne_method << " (nestmf: see Qiu etal: arxiv.org/abs/1906.11156, ne_zhang_et_al: see sec. 3.1 of Zhang et al: www.ijcai.org/proceedings/2019/594)"       << std::endl;
+  std::cout << "###  -ne_method = " << ne_method << " (netsmf: see Qiu etal: arxiv.org/abs/1906.11156, ne_zhang_et_al: see sec. 3.1 of Zhang et al: www.ijcai.org/proceedings/2019/594)"       << std::endl;
   std::cout << "###  -normalize = " << normalize << std::endl;
   std::cout << "###  -sample_ratio = " << sample_ratio << std::endl;
   std::cout << "###  -mem_ratio = " << mem_ratio << std::endl;
   std::cout << "###  -random_project_only = " << random_project_only << std::endl;
-  std::cout << "###  -sparse_project = " << sparse_project << " (0 represents gaussian random projection, 1 represents very sparse random projection and 2 represents sparse sign random projection)" << std::endl;
-  std::cout << "###  -sparse_project_s = " << sparse_project_s << " (when sparse_project >=1, and sparse_project_s is the sparse parameter for very sparse random projection or column sparsity of the sparse sign random projection)" << std::endl;
+  std::cout << "###  -sparse_project = " << sparse_project << std::endl;
+  std::cout << "###  -sparse_project_s = " << sparse_project_s << std::endl;
   std::cout << "###  -power_iteration = " << power_iteration  << std::endl;
   std::cout << "###  -oversampling = " << oversampling  << std::endl;
   std::cout << "###  -ne_out = " << ne_out       << std::endl;
@@ -98,11 +105,20 @@ double LightNE_mkl_runner(Graph& GA, commandLine P) {
     std::cout << coeff << " ";
   }
   std::cout << std::endl;
+
+  // path_embed::setup_link_prediction(GA, 0.0000001, "cw_edge.txt", "cw_degree.txt");
+  std::cout<<"### -sum step_coeff: "<<sum<<std::endl;
+  for (uint32_t i = 0;i<step_coeff.size();i++){
+    step_coeff[i] = step_coeff[i]/sum;
+  }
+  std::cout << "### -after normalize the step_coeff = ";
+  for (float coeff: step_coeff) {
+    std::cout << coeff << " ";
+  }
+  std::cout << std::endl;
   std::cout << "### ------------------------------------" << std::endl;
 
   timer t; t.start();
-
-  // path_embed::setup_link_prediction(GA, 0.0000001, "cw_edge.txt", "cw_degree.txt");
 
   using FP = float;
   std::cout << "# using float point type " << typeid(FP).name() << " (f for float, d for double)" << std::endl;
@@ -110,7 +126,7 @@ double LightNE_mkl_runner(Graph& GA, commandLine P) {
   if (ne_method == "netsmf") {
     emb = path_embed::NetSMF<Graph, FP>(GA, walks_per_edge, walk_len, upper, sample, rank, dim, analyze, table_size, negative, normalize, sample_ratio, mem_ratio, step_coeff, random_project_only, sparse_project, sparse_project_s,power_iteration,oversampling);
   } else {
-    emb = path_embed::NE_Zhang_et_al<Graph, FP>(GA, rank, dim,  random_project_only, sparse_project, sparse_project_s, power_iteration, oversampling, analyze, upper);
+    emb = path_embed::NE_Zhang_et_al<Graph, FP>(GA, rank, dim, power_iteration, oversampling, analyze, upper);
   }
   if (ne_out.size() > 0) {
     std::cout << "dump network embedding to " << ne_out << std::endl;
@@ -118,7 +134,7 @@ double LightNE_mkl_runner(Graph& GA, commandLine P) {
   }
   if (pro_out.size() > 0) {
     timer t_pro; t_pro.start();
-    spectral_propagation::chebyshev_expansion<Graph, FP>(emb, GA, order, 0.5, 0.2);
+    spectral_propagation::chebyshev_expansion<Graph, FP>(emb, GA, order, theta, mu);
     t_pro.stop(); t_pro.reportTotal("proX time");
     std::cout << "dump proX embedding to " << pro_out << std::endl;
     save<FP>(pro_out, emb, GA.n, dim);

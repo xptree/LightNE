@@ -23,6 +23,7 @@
 #include <random>
 #include <vector>
 #include <algorithm>
+#include "alias_method.hpp"
 
 using namespace mkl_frsvds;
 using namespace mkl_util;
@@ -86,8 +87,7 @@ namespace path_embed {
   template <class Graph, typename FP>
   auto generate_trunc_log_matrix_v2(Graph& GA,
       pbbs::random seed, size_t walks_per_edge, size_t walk_len, bool upper, bool sample, size_t table_size, size_t negative, float sample_ratio,
-      float mem_ratio, const std::vector<float>& step_coeff, MKL_INT*& rows_start, MKL_INT*& col_idx, FP*& value) {
-
+      float mem_ratio, const std::vector<float>& step_coeff, MKL_INT*& rows_start, MKL_INT*& col_idx, FP*& value, size_t& nnz) {
     using W = typename Graph::weight_type;
     size_t n = GA.n;
     size_t m = GA.m;
@@ -129,6 +129,7 @@ namespace path_embed {
                     static_cast<size_t>(std::max(x,z));
       HT.insert_add(std::make_tuple(key, w));
     };
+    discrete_random_variable drv(step_coeff);
     timer t; t.start();
     auto g_map_f = [&] (const uintE& u, const uintE& v, const W& wgh) {
       //1. generate exp r.v. seeded by (u,v)
@@ -142,13 +143,20 @@ namespace path_embed {
       // std::default_random_engine generator(our_seed.rand());
       // our_seed = our_seed.next();
       // std::discrete_distribution<uintE> distribution(step_coeff.begin(), step_coeff.end());
-
       if (!sample) {
         // Apply the sampler to this edge exp_rv many times
         for (size_t k=0; k<exp_rv; k++) {
           // uintE r = distribution(generator) + 1;
-          uintE r = our_seed.rand() % walk_len + 1;
+          
+          // sample from a discrete distribution via alias method
+          const size_t idx = static_cast<size_t>(our_seed.rand()) % step_coeff.size();
           our_seed = our_seed.next();
+          double real_dis = static_cast<double>(map_uint64_t(our_seed.rand()));
+          our_seed = our_seed.next();
+          uintE r = drv.sample(idx, real_dis) + 1;
+
+          // uintE r = our_seed.rand() % walk_len + 1;
+          // our_seed = our_seed.next();
           auto [x, z] = path_sample(GA, u, v, our_seed, r);
           emit_ht(x, z, static_cast<V>(1));
         }
@@ -166,8 +174,16 @@ namespace path_embed {
           our_seed = our_seed.next();
           if (eff_prob < approx_effective_resistance) {
             // uintE r = distribution(generator) + 1;
-            uintE r = our_seed.rand() % walk_len + 1;
+            
+            // sample from a discrete distribution via alias method
+            const size_t idx = static_cast<size_t>(our_seed.rand()) % step_coeff.size();
             our_seed = our_seed.next();
+            double real_dis = static_cast<double>(map_uint64_t(our_seed.rand()));
+            our_seed = our_seed.next();
+            uintE r = drv.sample(idx, real_dis) + 1;
+
+            // uintE r = our_seed.rand() % walk_len + 1;
+            // our_seed = our_seed.next();
             auto [x, z] = path_sample(GA, u, v, our_seed, r);
             emit_ht(x, z, static_cast<V>(ipw));
           }
@@ -374,7 +390,7 @@ namespace path_embed {
   }
 
   template <class Graph, typename FP>
-  mat<FP>* NE_Zhang_et_al(Graph& GA, size_t rank, size_t dim, bool random_project_only, size_t sparse_project, float sparse_project_s, size_t power_iteration, size_t oversampling, bool analyze, bool upper) {
+  mat<FP>* NE_Zhang_et_al(Graph& GA, size_t rank, size_t dim, size_t power_iteration,size_t oversampling,bool analyze,bool upper) {
     using W = typename Graph::weight_type;
     auto offs = pbbs::sequence<MKL_INT>(GA.n+1, [&] (size_t i) { return i==GA.n ? 0 : GA.get_vertex(i).getInDegree(); });
     size_t m = pbbslib::scan_add_inplace(offs.slice());
@@ -421,7 +437,7 @@ namespace path_embed {
     csr_A->cols = col_idx;
     csr_A->pointerB = rows_start;
     csr_A->pointerE = rows_end;
-    MKLfrsvds<FP> frsvdsofA(csr_A,rank,power_iteration,oversampling,upper,analyze,random_project_only,sparse_project,sparse_project_s);
+    MKLfrsvds<FP> frsvdsofA(csr_A,rank,power_iteration,oversampling,upper,analyze,false);
     frsvdsofA.run();
     mat<FP>* emb = util<FP>::matrix_new(n,dim);
     spectral_propagation::compute_u_sigma_root<FP>(frsvdsofA.matU,frsvdsofA.S, emb, dim, true);
@@ -459,10 +475,11 @@ namespace path_embed {
   }
 
   template <class Graph, typename FP>
-  mat<FP>* NetSMF(Graph& GA, size_t walks_per_edge, size_t walk_len, bool upper, bool sample, size_t rank, size_t dim, bool analyze, size_t table_size, size_t negative, bool normalize, float sample_ratio, float mem_ratio, const std::vector<float>& step_coeff, bool random_project_only, size_t sparse_project, float sparse_project_s, size_t power_iteration,size_t oversampling) {
+  mat<FP>* NetSMF(Graph& GA, size_t walks_per_edge, size_t walk_len, bool upper, bool sample, size_t rank, size_t dim, bool analyze, size_t table_size, size_t negative, bool normalize, float sample_ratio, float mem_ratio, const std::vector<float>& step_coeff, bool random_project_only, bool sparse_project, float sparse_project_s,size_t power_iteration,size_t oversampling) {
 
     MKL_INT n = static_cast<MKL_INT>(GA.n);
     timer t_path_sampling; t_path_sampling.start();
+    //size_t seed = 2;
     size_t seed = time(0);
     std::cout << "# seed = " << seed << std::endl;
     
@@ -473,9 +490,10 @@ namespace path_embed {
     if (csr) {
       rows_start = new MKL_INT[GA.n + 1];
     }
+    size_t nnz;
     auto edges = generate_trunc_log_matrix_v2(GA, pbbs::random(seed), walks_per_edge, walk_len, upper, sample,
                               table_size, negative, sample_ratio, mem_ratio, step_coeff,
-                              rows_start, col_idx, value);
+                              rows_start, col_idx, value, nnz);
     t_path_sampling.stop();
     t_path_sampling.reportTotal("# generate matrix time");
 
@@ -523,7 +541,7 @@ namespace path_embed {
     csr_A->cols = col_idx;
     csr_A->pointerB = rows_start;
     csr_A->pointerE = rows_end;
-    MKLfrsvds<FP> frsvdsofA(csr_A,rank,power_iteration,oversampling,upper,analyze,random_project_only,sparse_project,sparse_project_s);
+    MKLfrsvds<FP> frsvdsofA(csr_A,rank,power_iteration,oversampling,upper,analyze,sparse_project);
     frsvdsofA.run();
     mat<FP>* emb = util<FP>::matrix_new(n,dim);
     spectral_propagation::compute_u_sigma_root<FP>(frsvdsofA.matU, frsvdsofA.S, emb, dim, normalize);

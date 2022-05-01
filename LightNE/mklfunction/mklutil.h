@@ -123,6 +123,8 @@ struct util {
   /* M(inds,:) = Mr */
   static void matrix_set_selected_rows(mat<T> *M, MKL_INT *inds, mat<T> *Mr);
   
+  static void matrix_copy_columns(mat<T> *M, MKL_INT *inds, mat<T> *Mc);
+
   //B = alpha*A+B
   static void matrix_matrix_add(mat<T> *A, mat<T> *B,T alpha);
 

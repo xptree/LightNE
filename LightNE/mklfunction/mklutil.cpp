@@ -201,14 +201,14 @@ template <typename T>
 void util<T>::matrix_set_col(mat<T> *M, MKL_INT j, vec<T> *column_vec)
 {
   MKL_INT i;
-  #pragma omp parallel shared(column_vec, M, j) private(i)
-  {
-  #pragma omp for
+  //#pragma omp parallel shared(column_vec, M, j) private(i)
+  //{
+  //#pragma omp for
       for (i = 0; i < M->nrows; i++)
       {
           matrix_set_element(M, i, j, vector_get_element(column_vec, i));
       }
-  }
+  //}
 }
 
 /* extract column of a matrix into a vector */
@@ -216,14 +216,14 @@ template <typename T>
 void util<T>::matrix_get_col(mat<T> *M, MKL_INT j, vec<T> *column_vec)
 {
   MKL_INT i;
-  #pragma omp parallel shared(column_vec, M, j) private(i)
-  {
-  #pragma omp for
+  //#pragma omp parallel shared(column_vec, M, j) private(i)
+  //{
+  //#pragma omp for
       for (i = 0; i < M->nrows; i++)
       {
           vector_set_element(column_vec, i, matrix_get_element(M, i, j));
       }
-  }
+  //}
 }
 
 /* extract row i of a matrix into a vector */
@@ -231,14 +231,14 @@ template <typename T>
 void util<T>::matrix_get_row(mat<T> *M, MKL_INT i, vec<T> *row_vec)
 {
   MKL_INT j;
-  #pragma omp parallel shared(row_vec, M, i) private(j)
-  {
-  #pragma omp for
+  //#pragma omp parallel shared(row_vec, M, i) private(j)
+  //{
+  //#pragma omp for
       for (j = 0; j < M->ncols; j++)
       {
           vector_set_element(row_vec, j, matrix_get_element(M, i, j));
       }
-  }
+  //}
 }
 
 /* put vector row_vec as row i of a matrix */
@@ -246,14 +246,14 @@ template <typename T>
 void util<T>::matrix_set_row(mat<T> *M, MKL_INT i, vec<T> *row_vec)
 {
   MKL_INT j;
-  #pragma omp parallel shared(row_vec, M, i) private(j)
-  {
-  #pragma omp for
+  //#pragma omp parallel shared(row_vec, M, i) private(j)
+  //{
+  //#pragma omp for
       for (j = 0; j < M->ncols; j++)
       {
           matrix_set_element(M, i, j, vector_get_element(row_vec, j));
       }
-  }
+  //}
 }
 
 /* Mc = M(:,inds) */
@@ -261,13 +261,12 @@ template <typename T>
 void util<T>::matrix_get_selected_columns(mat<T> *M, MKL_INT *inds, mat<T> *Mc)
 {
   MKL_INT i;
-  vec<T> *col_vec;
-  #pragma omp parallel shared(M, Mc, inds) private(i, col_vec)
+  #pragma omp parallel shared(M, Mc, inds) private(i)
   {
   #pragma omp for
       for (i = 0; i < (Mc->ncols); i++)
       {
-          col_vec = vector_new(M->nrows);
+          vec<T> *col_vec = vector_new(M->nrows);
           matrix_get_col(M, inds[i], col_vec);
           matrix_set_col(Mc, i, col_vec);
           vector_delete(col_vec);
@@ -280,13 +279,12 @@ template <typename T>
 void util<T>::matrix_set_selected_columns(mat<T> *M, MKL_INT *inds, mat<T> *Mc)
 {
   MKL_INT i;
-  vec<T> *col_vec;
-  #pragma omp parallel shared(M, Mc, inds) private(i, col_vec)
+  #pragma omp parallel shared(M, Mc, inds) private(i)
   {
   #pragma omp parallel for
       for (i = 0; i < (Mc->ncols); i++)
       {
-          col_vec = vector_new(M->nrows);
+          vec<T> *col_vec = vector_new(M->nrows);
           matrix_get_col(Mc, i, col_vec);
           matrix_set_col(M, inds[i], col_vec);
           vector_delete(col_vec);
@@ -294,18 +292,36 @@ void util<T>::matrix_set_selected_columns(mat<T> *M, MKL_INT *inds, mat<T> *Mc)
   }
 }
 
+
+/* Mc = M(:,inds) */
+template <typename T>
+void util<T>::matrix_copy_columns(mat<T> *M, MKL_INT *inds, mat<T> *Mc)
+{
+  MKL_INT i;
+  MKL_INT r = Mc->nrows;
+  MKL_INT c = Mc->ncols;
+  #pragma omp parallel shared(M, Mc, inds, r, c) private(i)
+  {
+  #pragma omp for
+      for (i = 0; i < (Mc->ncols); i++)
+      {
+          mklhelper<T>::cblas_copy(r,M->d+inds[i],M->ncols,Mc->d+i,c);
+      }
+  }
+}
+
+
 /* Mr = M(inds,:) */
 template <typename T>
 void util<T>::matrix_get_selected_rows(mat<T> *M, MKL_INT *inds, mat<T> *Mr)
 {
   MKL_INT i;
-  vec<T> *row_vec;
-  #pragma omp parallel shared(M, Mr, inds) private(i, row_vec)
+  #pragma omp parallel shared(M, Mr, inds) private(i)
   {
   #pragma omp parallel for
       for (i = 0; i < (Mr->nrows); i++)
       {
-          row_vec = vector_new(M->ncols);
+          vec<T> *row_vec = vector_new(M->ncols);
           matrix_get_row(M, inds[i], row_vec);
           matrix_set_row(Mr, i, row_vec);
           vector_delete(row_vec);
@@ -318,20 +334,18 @@ template <typename T>
 void util<T>::matrix_set_selected_rows(mat<T> *M, MKL_INT *inds, mat<T> *Mr)
 {
   MKL_INT i;
-  vec<T> *row_vec;
-  #pragma omp parallel shared(M, Mr, inds) private(i, row_vec)
+  #pragma omp parallel shared(M, Mr, inds) private(i)
   {
   #pragma omp parallel for
       for (i = 0; i < (Mr->nrows); i++)
       {
-          row_vec = vector_new(M->ncols);
+          vec<T> *row_vec = vector_new(M->ncols);
           matrix_get_row(Mr, i, row_vec);
           matrix_set_row(M, inds[i], row_vec);
           vector_delete(row_vec);
       }
   }
 }
-
 //B = alpha*A+B
 template <typename T>
 void util<T>::matrix_matrix_add(mat<T> *A, mat<T> *B,T alpha)
